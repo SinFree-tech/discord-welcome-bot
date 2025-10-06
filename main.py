@@ -133,6 +133,7 @@ async def on_ready():
 # ======================
 # INICIO DEL BOT
 # ======================
+print("DEBUG TOKEN:", os.getenv("TOKEN"))
 bot.run(os.getenv("TOKEN"))
 
 
