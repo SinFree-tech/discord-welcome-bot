@@ -5,19 +5,22 @@ import os
 import json
 
 # ======================
-# INTENTS (necesarios para bienvenida y moderación)
+# CONFIGURACIÓN DE INTENTS
 # ======================
 intents = discord.Intents.default()
 intents.members = True
-intents.voice_states = True  # 👈 necesario para detectar entrada/salida de voz
+intents.voice_states = True
+intents.guilds = True
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ======================
-# CONFIGURACIÓN
+# CONFIGURACIÓN GENERAL
 # ======================
 WELCOME_CHANNEL_ID = 1254534174430199888
-TEMP_VOICE_CREATOR_ID = 1425009175489937408  # 👈 Canal base para crear salas temporales
+TEMP_VOICE_CREATOR_ID = 1425009175489937408  # Canal base de voz
+TEMP_PANEL_CHANNEL_ID = 1425026451677384744  # Canal de texto donde va el panel
 TEMP_CHANNELS_FILE = "temp_channels.json"
 TEMP_CHANNELS = {}
 
@@ -36,7 +39,7 @@ def save_temp_channels():
         json.dump({str(k): v for k, v in TEMP_CHANNELS.items()}, f, indent=4)
 
 # ======================
-# EVENTO: on_member_join (bienvenida con embed)
+# EVENTO: on_member_join (bienvenida)
 # ======================
 @bot.event
 async def on_member_join(member):
@@ -84,10 +87,8 @@ async def on_voice_state_update(member, before, after):
             category=category,
         )
 
-        # Mover al usuario al nuevo canal
         await member.move_to(new_channel)
 
-        # Guardar el canal
         TEMP_CHANNELS[new_channel.id] = member.id
         save_temp_channels()
 
@@ -99,67 +100,225 @@ async def on_voice_state_update(member, before, after):
             save_temp_channels()
 
 # ======================
-# COMANDOS /vc_* (solo dueño del canal)
+# PANEL DE CONTROL DE VOZ
 # ======================
-@bot.tree.command(name="vc_rename", description="Cambia el nombre de tu canal temporal")
-@app_commands.describe(nombre="Nuevo nombre del canal")
-async def vc_rename(interaction: discord.Interaction, nombre: str):
-    channel = interaction.user.voice.channel if interaction.user.voice else None
-    if not channel or channel.id not in TEMP_CHANNELS:
-        return await interaction.response.send_message("❌ No estás en un canal temporal.", ephemeral=True)
-    if TEMP_CHANNELS[channel.id] != interaction.user.id:
-        return await interaction.response.send_message("🚫 Solo el dueño del canal puede hacerlo.", ephemeral=True)
-    await channel.edit(name=nombre)
-    await interaction.response.send_message(f"✅ Canal renombrado a **{nombre}**")
+class VoicePanel(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-@bot.tree.command(name="vc_lock", description="Haz tu canal temporal privado")
-async def vc_lock(interaction: discord.Interaction):
-    channel = interaction.user.voice.channel if interaction.user.voice else None
-    if not channel or channel.id not in TEMP_CHANNELS:
-        return await interaction.response.send_message("❌ No estás en un canal temporal.", ephemeral=True)
-    if TEMP_CHANNELS[channel.id] != interaction.user.id:
-        return await interaction.response.send_message("🚫 Solo el dueño del canal puede hacerlo.", ephemeral=True)
-    await channel.set_permissions(interaction.guild.default_role, connect=False)
-    await interaction.response.send_message("🔒 Tu canal ahora es **privado**.")
+    async def validate_owner(self, interaction: discord.Interaction):
+        if not interaction.user.voice or interaction.user.voice.channel.id not in TEMP_CHANNELS:
+            await interaction.response.send_message("❌ No estás en un canal temporal.", ephemeral=True)
+            return None
+        channel = interaction.user.voice.channel
+        owner_id = TEMP_CHANNELS[channel.id]
+        if owner_id != interaction.user.id:
+            await interaction.response.send_message("🚫 Solo el dueño del canal puede usar este panel.", ephemeral=True)
+            return None
+        return channel
 
-@bot.tree.command(name="vc_unlock", description="Haz tu canal temporal público")
-async def vc_unlock(interaction: discord.Interaction):
-    channel = interaction.user.voice.channel if interaction.user.voice else None
-    if not channel or channel.id not in TEMP_CHANNELS:
-        return await interaction.response.send_message("❌ No estás en un canal temporal.", ephemeral=True)
-    if TEMP_CHANNELS[channel.id] != interaction.user.id:
-        return await interaction.response.send_message("🚫 Solo el dueño del canal puede hacerlo.", ephemeral=True)
-    await channel.set_permissions(interaction.guild.default_role, connect=True)
-    await interaction.response.send_message("🔓 Tu canal ahora es **público**.")
+    # 📝 Cambiar nombre
+    @discord.ui.button(label="Cambiar nombre", style=discord.ButtonStyle.primary, emoji="📝")
+    async def rename(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = await self.validate_owner(interaction)
+        if not channel:
+            return
 
-@bot.tree.command(name="vc_mute", description="Mutea a un miembro en tu canal temporal")
-@app_commands.describe(miembro="Miembro a mutear")
-async def vc_mute(interaction: discord.Interaction, miembro: discord.Member):
-    channel = interaction.user.voice.channel if interaction.user.voice else None
-    if not channel or channel.id not in TEMP_CHANNELS:
-        return await interaction.response.send_message("❌ No estás en un canal temporal.", ephemeral=True)
-    if TEMP_CHANNELS[channel.id] != interaction.user.id:
-        return await interaction.response.send_message("🚫 Solo el dueño del canal puede hacerlo.", ephemeral=True)
-    if miembro not in channel.members:
-        return await interaction.response.send_message("❌ Ese usuario no está en tu canal.", ephemeral=True)
-    await miembro.edit(mute=True)
-    await interaction.response.send_message(f"🔇 {miembro.mention} fue muteado.")
+        await interaction.response.send_message("✏️ Escribe el nuevo nombre del canal:", ephemeral=True)
+        def check(m): return m.author == interaction.user and m.channel == interaction.channel
 
-@bot.tree.command(name="vc_unmute", description="Desmutea a un miembro en tu canal temporal")
-@app_commands.describe(miembro="Miembro a desmutear")
-async def vc_unmute(interaction: discord.Interaction, miembro: discord.Member):
-    channel = interaction.user.voice.channel if interaction.user.voice else None
-    if not channel or channel.id not in TEMP_CHANNELS:
-        return await interaction.response.send_message("❌ No estás en un canal temporal.", ephemeral=True)
-    if TEMP_CHANNELS[channel.id] != interaction.user.id:
-        return await interaction.response.send_message("🚫 Solo el dueño del canal puede hacerlo.", ephemeral=True)
-    if miembro not in channel.members:
-        return await interaction.response.send_message("❌ Ese usuario no está en tu canal.", ephemeral=True)
-    await miembro.edit(mute=False)
-    await interaction.response.send_message(f"🔊 {miembro.mention} fue desmuteado.")
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=60)
+            await channel.edit(name=msg.content)
+            await msg.delete()
+            await interaction.followup.send(f"✅ Canal renombrado a **{msg.content}**", ephemeral=True)
+        except Exception:
+            await interaction.followup.send("⏰ Tiempo agotado, intenta de nuevo.", ephemeral=True)
+
+    # 🔒 Cambiar privacidad
+    @discord.ui.button(label="Privacidad", style=discord.ButtonStyle.secondary, emoji="🔒")
+    async def privacy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = await self.validate_owner(interaction)
+        if not channel:
+            return
+
+        perms = channel.overwrites_for(interaction.guild.default_role)
+        locked = perms.connect is False
+        await channel.set_permissions(interaction.guild.default_role, connect=locked)
+        estado = "🔓 Público" if locked else "🔒 Privado"
+        await interaction.response.send_message(f"✅ Tu canal ahora es **{estado}**", ephemeral=True)
+
+    # ✅ Permitir usuarios
+    @discord.ui.button(label="Permitir", style=discord.ButtonStyle.success, emoji="✅")
+    async def allow(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = await self.validate_owner(interaction)
+        if not channel:
+            return
+
+        options = [
+            discord.SelectOption(label=m.display_name, value=str(m.id))
+            for m in interaction.guild.members if not m.bot
+        ][:25]
+
+        class AllowSelect(discord.ui.Select):
+            def __init__(self):
+                super().__init__(
+                    placeholder="Selecciona miembros para permitir acceso",
+                    min_values=1,
+                    max_values=len(options),
+                    options=options
+                )
+            async def callback(self, select_interaction: discord.Interaction):
+                for uid in self.values:
+                    user = interaction.guild.get_member(int(uid))
+                    await channel.set_permissions(user, connect=True, view_channel=True)
+                await select_interaction.response.send_message("✅ Permisos actualizados.", ephemeral=True)
+
+        view = discord.ui.View()
+        view.add_item(AllowSelect())
+        await interaction.response.send_message("Selecciona usuarios para permitir acceso:", view=view, ephemeral=True)
+
+    # 🚫 Quitar acceso
+    @discord.ui.button(label="Quitar acceso", style=discord.ButtonStyle.danger, emoji="🚫")
+    async def disallow(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = await self.validate_owner(interaction)
+        if not channel:
+            return
+
+        allowed = [
+            o for o in channel.overwrites
+            if isinstance(o, discord.Member) and channel.overwrites[o].connect
+        ]
+        options = [discord.SelectOption(label=u.display_name, value=str(u.id)) for u in allowed][:25]
+        if not options:
+            return await interaction.response.send_message("⚠️ No hay usuarios con permisos especiales.", ephemeral=True)
+
+        class DisallowSelect(discord.ui.Select):
+            def __init__(self):
+                super().__init__(
+                    placeholder="Selecciona miembros para quitar acceso",
+                    min_values=1,
+                    max_values=len(options),
+                    options=options
+                )
+            async def callback(self, select_interaction: discord.Interaction):
+                for uid in self.values:
+                    user = interaction.guild.get_member(int(uid))
+                    await channel.set_permissions(user, overwrite=None)
+                await select_interaction.response.send_message("🚫 Acceso retirado.", ephemeral=True)
+
+        view = discord.ui.View()
+        view.add_item(DisallowSelect())
+        await interaction.response.send_message("Selecciona usuarios para quitar acceso:", view=view, ephemeral=True)
+
+    # 🔇 Mutear usuarios
+    @discord.ui.button(label="Mutear", style=discord.ButtonStyle.primary, emoji="🔇")
+    async def mute(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = await self.validate_owner(interaction)
+        if not channel:
+            return
+
+        members = [m for m in channel.members if not m.bot and m != interaction.user]
+        if not members:
+            return await interaction.response.send_message("⚠️ No hay usuarios en tu canal.", ephemeral=True)
+
+        options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members][:25]
+
+        class MuteSelect(discord.ui.Select):
+            def __init__(self):
+                super().__init__(
+                    placeholder="Selecciona usuarios para mutear",
+                    min_values=1,
+                    max_values=len(options),
+                    options=options
+                )
+            async def callback(self, select_interaction: discord.Interaction):
+                for uid in self.values:
+                    user = interaction.guild.get_member(int(uid))
+                    await user.edit(mute=True)
+                await select_interaction.response.send_message("🔇 Usuarios muteados.", ephemeral=True)
+
+        view = discord.ui.View()
+        view.add_item(MuteSelect())
+        await interaction.response.send_message("Selecciona usuarios para mutear:", view=view, ephemeral=True)
+
+    # 👢 Expulsar usuarios
+    @discord.ui.button(label="Expulsar", style=discord.ButtonStyle.danger, emoji="👢")
+    async def kick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = await self.validate_owner(interaction)
+        if not channel:
+            return
+
+        members = [m for m in channel.members if not m.bot and m != interaction.user]
+        if not members:
+            return await interaction.response.send_message("⚠️ No hay usuarios en tu canal.", ephemeral=True)
+
+        options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members][:25]
+
+        class KickSelect(discord.ui.Select):
+            def __init__(self):
+                super().__init__(
+                    placeholder="Selecciona usuarios para expulsar",
+                    min_values=1,
+                    max_values=len(options),
+                    options=options
+                )
+            async def callback(self, select_interaction: discord.Interaction):
+                for uid in self.values:
+                    user = interaction.guild.get_member(int(uid))
+                    await user.move_to(None)
+                await select_interaction.response.send_message("👢 Usuarios expulsados.", ephemeral=True)
+
+        view = discord.ui.View()
+        view.add_item(KickSelect())
+        await interaction.response.send_message("Selecciona usuarios para expulsar:", view=view, ephemeral=True)
 
 # ======================
-# OTROS COMANDOS / BÁSICOS
+# EVENTO: on_ready
+# ======================
+@bot.event
+async def on_ready():
+    global TEMP_CHANNELS
+    TEMP_CHANNELS.update(load_temp_channels())
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} comandos sincronizados.")
+    except Exception as e:
+        print(f"❌ Error al sincronizar: {e}")
+
+    print(f"🤖 Conectado como {bot.user}")
+
+    # Mantener panel activo
+    bot.add_view(VoicePanel())
+
+    # Crear panel visual
+    channel = bot.get_channel(TEMP_PANEL_CHANNEL_ID)
+    if channel:
+        async for msg in channel.history(limit=10):
+            if msg.author == bot.user and msg.components:
+                break
+        else:
+            embed = discord.Embed(
+                title="🎛️ Panel de control de salas temporales",
+                description=(
+                    "Crea una sala uniéndote al canal de voz base.\n\n"
+                    "**Desde aquí puedes:**\n"
+                    "📝 Cambiar el nombre de tu sala.\n"
+                    "🔒 Hacerla privada o pública.\n"
+                    "✅ Permitir acceso a usuarios.\n"
+                    "🚫 Quitar acceso a usuarios.\n"
+                    "🔇 Mutear miembros dentro de tu canal.\n"
+                    "👢 Expulsar miembros del canal.\n\n"
+                    "⚙️ *Solo el dueño del canal puede usar estos controles.*"
+                ),
+                color=discord.Color.blurple()
+            )
+            embed.set_footer(text="🎧 Sistema TemVoice Plus | by CesarBot")
+            await channel.send(embed=embed, view=VoicePanel())
+
+# ======================
+# COMANDOS BÁSICOS
 # ======================
 @bot.tree.command(name="bienvenida", description="El bot te da un saludo de bienvenida")
 async def bienvenida(interaction: discord.Interaction):
@@ -185,30 +344,7 @@ async def sync(interaction: discord.Interaction):
     await interaction.response.send_message(f"✅ Se sincronizaron {len(synced)} comandos.", ephemeral=True)
 
 # ======================
-# EVENTO: on_ready
-# ======================
-@bot.event
-async def on_ready():
-    global TEMP_CHANNELS
-    loaded = load_temp_channels()
-    TEMP_CHANNELS.update(loaded)
-
-    for ch_id in list(TEMP_CHANNELS.keys()):
-        if not bot.get_channel(ch_id):
-            TEMP_CHANNELS.pop(ch_id, None)
-    save_temp_channels()
-
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ Se sincronizaron {len(synced)} comandos globales")
-    except Exception as e:
-        print(f"❌ Error al sincronizar comandos: {e}")
-
-    print(f"🤖 Bot conectado como {bot.user}")
-    print(f"📂 Canales temporales cargados: {len(TEMP_CHANNELS)}")
-
-# ======================
-# EJECUCIÓN
+# INICIO
 # ======================
 bot.run(os.getenv("TOKEN"))
 
