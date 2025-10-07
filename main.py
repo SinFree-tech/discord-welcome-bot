@@ -364,7 +364,7 @@ async def vc(interaction: discord.Interaction):
 
 # ---------------------- EJECUCIÓN ----------------------
 
-bot.run(TOKEN)
+bot.run(os.getenv("TOKEN"))
 
 
 
