@@ -38,7 +38,6 @@ def save_data(data):
 data = load_data()
 
 async def auto_delete_msg(msg_obj, delay=120):
-    """Borra los mensajes efímeros después de cierto tiempo"""
     try:
         await asyncio.sleep(delay)
         await msg_obj.delete()
@@ -102,6 +101,7 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
 # ======================
 @bot.event
 async def on_voice_state_update(member, before, after):
+    # ✅ Crear canal temporal
     if after.channel and after.channel.id == VOICE_CREATION_CHANNEL_ID:
         guild = member.guild
         category = after.channel.category
@@ -115,6 +115,7 @@ async def on_voice_state_update(member, before, after):
         data[str(new_channel.id)] = {"owner_id": member.id}
         save_data(data)
 
+    # ❌ Eliminar canal vacío
     if before.channel and str(before.channel.id) in data:
         if len(before.channel.members) == 0:
             try:
@@ -258,6 +259,24 @@ class VoicePanel(discord.ui.View):
         asyncio.create_task(auto_delete_msg(msg, 120))
 
 # ======================
+# RESTAURAR CANALES AL INICIAR
+# ======================
+async def restore_temp_channels():
+    await bot.wait_until_ready()
+    guild = bot.guilds[0]
+    to_delete = []
+    for ch_id, info in data.items():
+        ch = guild.get_channel(int(ch_id))
+        if ch is None:
+            to_delete.append(ch_id)
+    for ch_id in to_delete:
+        del data[ch_id]
+    if to_delete:
+        save_data(data)
+        print(f"🧹 Eliminados {len(to_delete)} registros huérfanos del JSON.")
+    print("🔁 Restauración completada. Canales activos recordados correctamente.")
+
+# ======================
 # CREACIÓN AUTOMÁTICA DEL PANEL
 # ======================
 async def setup_panel():
@@ -286,7 +305,7 @@ async def setup_panel():
     await channel.send(embed=embed, view=VoicePanel())
 
 # ======================
-# SLASH COMMAND: /panel
+# /panel manual
 # ======================
 @bot.tree.command(name="panel", description="Recrear manualmente el panel")
 async def panel(interaction: discord.Interaction):
@@ -296,7 +315,7 @@ async def panel(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Panel recreado correctamente.", ephemeral=True)
 
 # ======================
-# SINCRONIZAR COMANDOS
+# /sync
 # ======================
 @bot.tree.command(name="sync", description="Forzar sincronización global de comandos")
 async def sync(interaction: discord.Interaction):
@@ -304,7 +323,7 @@ async def sync(interaction: discord.Interaction):
     await interaction.response.send_message(f"✅ Se sincronizaron {len(synced)} comandos globales", ephemeral=True)
 
 # ======================
-# EVENTO READY
+# READY
 # ======================
 @bot.event
 async def on_ready():
@@ -315,12 +334,14 @@ async def on_ready():
         print(f"❌ Error al sincronizar comandos: {e}")
     bot.add_view(VoicePanel())
     asyncio.create_task(setup_panel())
+    asyncio.create_task(restore_temp_channels())
     print(f"🤖 Conectado como {bot.user}")
 
 # ======================
 # INICIO
 # ======================
 bot.run(os.getenv("TOKEN"))
+
 
 
 
