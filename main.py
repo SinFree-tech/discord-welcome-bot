@@ -4,7 +4,6 @@ from discord import app_commands
 import os
 import asyncio
 import json
-import traceback
 
 # ======================
 # INTENTS
@@ -38,42 +37,12 @@ def save_data(data):
 
 data = load_data()
 
-# ======================
-# UTIL: enviar mensaje (response o followup) y auto-borrar
-# ======================
-async def send_and_autodelete(interaction: discord.Interaction, content: str = None,
-                              embed: discord.Embed = None, view: discord.ui.View = None,
-                              ephemeral: bool = True, delete_after: int = 120):
-    """
-    Envía un mensaje relacionado a la interacción. Si interaction.response no está usado
-    lo envía como response, si ya está usado, lo envía como followup. Programa borrado.
-    Devuelve el objeto Message enviado o None si fallo.
-    """
+async def auto_delete_msg(msg_obj, delay=120):
     try:
-        # Si no se ha respondido, usar response
-        if not interaction.response.is_done():
-            await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=ephemeral)
-            # original_response() devuelve el Message asociado a la response
-            msg = await interaction.original_response()
-        else:
-            msg = await interaction.followup.send(content=content, embed=embed, view=view, ephemeral=ephemeral)
-    except Exception as e:
-        # No insisto; devuelvo None
-        # registra para diagnóstico
-        traceback.print_exc()
-        return None
-
-    # Programar borrado si se solicitó
-    if delete_after and msg:
-        async def _deleter(m, delay):
-            await asyncio.sleep(delay)
-            try:
-                await m.delete()
-            except:
-                pass
-        asyncio.create_task(_deleter(msg, delete_after))
-
-    return msg
+        await asyncio.sleep(delay)
+        await msg_obj.delete()
+    except:
+        pass
 
 # ======================
 # EVENTO: BIENVENIDA
@@ -95,10 +64,7 @@ async def on_member_join(member):
         embed.add_field(name="🎲 Roles", value="<#1273266265405919284>", inline=True)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text="Nos alegra tenerte con nosotros 🦁")
-        try:
-            await canal.send(embed=embed)
-        except:
-            pass
+        await canal.send(embed=embed)
 
 # ======================
 # COMANDOS BÁSICOS
@@ -135,7 +101,7 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
 # ======================
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # Crear canal temporal al unirse al canal base
+    # ✅ Crear canal temporal
     if after.channel and after.channel.id == VOICE_CREATION_CHANNEL_ID:
         guild = member.guild
         category = after.channel.category
@@ -145,15 +111,11 @@ async def on_voice_state_update(member, before, after):
         )
         everyone = guild.default_role
         await new_channel.set_permissions(everyone, view_channel=True, connect=True)
-        try:
-            await member.move_to(new_channel)
-        except:
-            # Si el bot no puede mover (permiso), seguimos; el canal igual fue creado y guardado.
-            pass
+        await member.move_to(new_channel)
         data[str(new_channel.id)] = {"owner_id": member.id}
         save_data(data)
 
-    # Eliminar canal vacío si está en registros
+    # ❌ Eliminar canal vacío
     if before.channel and str(before.channel.id) in data:
         if len(before.channel.members) == 0:
             try:
@@ -170,182 +132,149 @@ class VoicePanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    async def get_owned_channel(self, user: discord.Member):
+    async def get_owned_channel(self, user):
         for ch_id, info in data.items():
             if info.get("owner_id") == user.id:
                 return user.guild.get_channel(int(ch_id))
         return None
 
-    # ----- RENAME -----
     @discord.ui.button(label="Nombre", style=discord.ButtonStyle.primary, emoji="📝", custom_id="vc_rename")
     async def rename(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
         if not channel:
-            return await send_and_autodelete(interaction, "❌ No eres dueño de ninguna sala activa.", delete_after=8)
-        # Pedir nuevo nombre (ephemeral)
-        await send_and_autodelete(interaction, "✏️ Escribe el nuevo nombre (60s):", delete_after=120)
+            return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
+        await interaction.response.send_message("✏️ Escribe el nuevo nombre (60s):", ephemeral=True)
 
         def check(m): return m.author == interaction.user and m.channel == interaction.channel
         try:
             msg = await bot.wait_for("message", check=check, timeout=60)
-            new_name = msg.content.strip()
-            # verificar permiso manage_channels antes de editar
-            try:
-                await channel.edit(name=new_name)
-            except Exception:
-                # informar si fallo
-                await send_and_autodelete(interaction, "❌ No pude renombrar el canal (falta permiso Manage Channels).", delete_after=10)
-                try: await msg.delete()
-                except: pass
-                return
-            try: await msg.delete()
-            except: pass
-            await send_and_autodelete(interaction, f"✅ Nombre cambiado a **{new_name}**", delete_after=8)
+            await channel.edit(name=msg.content)
+            await msg.delete()
+            resp = await interaction.followup.send(f"✅ Nombre cambiado a **{msg.content}**", ephemeral=True)
+            asyncio.create_task(auto_delete_msg(resp, 120))
         except asyncio.TimeoutError:
-            await send_and_autodelete(interaction, "⏰ Tiempo agotado.", delete_after=8)
+            resp = await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
+            asyncio.create_task(auto_delete_msg(resp, 120))
 
-    # ----- PRIVACY -----
     @discord.ui.button(label="Privacidad", style=discord.ButtonStyle.secondary, emoji="🔒", custom_id="vc_lock")
     async def privacy(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
         if not channel:
-            return await send_and_autodelete(interaction, "❌ No eres dueño de ninguna sala activa.", delete_after=8)
+            return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
         everyone = interaction.guild.default_role
         perms = channel.overwrites_for(everyone)
         locked = perms.connect is False
 
-        # Intentar cambiar overwrites (revisar permiso manage_channels)
-        try:
-            if locked:
-                await channel.set_permissions(everyone, view_channel=True, connect=True)
-                await send_and_autodelete(interaction, "🔓 Canal abierto para todos.", delete_after=8)
-            else:
-                await channel.set_permissions(everyone, view_channel=True, connect=False)
-                await channel.set_permissions(interaction.user, view_channel=True, connect=True)
-                await send_and_autodelete(interaction, "🔒 Canal bloqueado (visible pero sin acceso).", delete_after=8)
-        except Exception:
-            await send_and_autodelete(interaction, "❌ No pude cambiar la privacidad (falta permiso Manage Channels).", delete_after=10)
+        if locked:
+            await channel.set_permissions(everyone, view_channel=True, connect=True)
+            msg = await interaction.response.send_message("🔓 Canal abierto para todos.", ephemeral=True)
+        else:
+            await channel.set_permissions(everyone, view_channel=True, connect=False)
+            await channel.set_permissions(interaction.user, view_channel=True, connect=True)
+            msg = await interaction.response.send_message("🔒 Canal bloqueado (visible pero sin acceso).", ephemeral=True)
+        asyncio.create_task(auto_delete_msg(msg, 120))
 
-    # ----- ALLOW -----
     @discord.ui.button(label="Permitir", style=discord.ButtonStyle.success, emoji="✅", custom_id="vc_allow")
     async def allow(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
         if not channel:
-            return await send_and_autodelete(interaction, "❌ No eres dueño de ninguna sala activa.", delete_after=8)
+            return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
 
-        # Pedir query (ephemeral)
-        await send_and_autodelete(interaction, "🔍 Escribe el nombre o ID del usuario (60s):", delete_after=120)
+        await interaction.response.send_message("🔍 Escribe el nombre o ID del usuario (60s):", ephemeral=True)
         def check(m): return m.author == interaction.user and m.channel == interaction.channel
         try:
             msg = await bot.wait_for("message", check=check, timeout=60)
             query = msg.content.lower().strip()
-            try: await msg.delete()
-            except: pass
-
+            await msg.delete()
             matches = [m for m in interaction.guild.members if query in m.display_name.lower() or query == str(m.id)]
             if not matches:
-                return await send_and_autodelete(interaction, "❌ No encontré usuarios.", delete_after=8)
+                return await interaction.followup.send("❌ No encontré usuarios.", ephemeral=True)
 
             options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in matches[:25]]
-
             class AllowSelect(discord.ui.Select):
                 def __init__(self):
                     super().__init__(placeholder="Selecciona miembros", min_values=1, max_values=len(options), options=options)
-
-                async def callback(self, si: discord.Interaction):
+                async def callback(self, si):
                     for uid in self.values:
                         member = interaction.guild.get_member(int(uid))
                         if member:
-                            try:
-                                await channel.set_permissions(member, view_channel=True, connect=True)
-                            except:
-                                pass
-                    await send_and_autodelete(si, "✅ Permisos actualizados.", delete_after=8)
-
+                            await channel.set_permissions(member, view_channel=True, connect=True)
+                    resp = await si.response.send_message("✅ Permisos actualizados.", ephemeral=True)
+                    asyncio.create_task(auto_delete_msg(resp, 120))
             view = discord.ui.View(timeout=60)
             view.add_item(AllowSelect())
-            await send_and_autodelete(interaction, "Selecciona usuarios:", view=view, delete_after=120)
+            msg = await interaction.followup.send("Selecciona usuarios:", view=view, ephemeral=True)
+            asyncio.create_task(auto_delete_msg(msg, 120))
         except asyncio.TimeoutError:
-            await send_and_autodelete(interaction, "⏰ Tiempo agotado.", delete_after=8)
+            msg = await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
+            asyncio.create_task(auto_delete_msg(msg, 120))
 
-    # ----- DISALLOW -----
     @discord.ui.button(label="Despermitir", style=discord.ButtonStyle.danger, emoji="🚫", custom_id="vc_disallow")
     async def disallow(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
         if not channel:
-            return await send_and_autodelete(interaction, "❌ No eres dueño de ninguna sala activa.", delete_after=8)
+            return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
 
         allowed = [m for m, o in channel.overwrites.items() if isinstance(m, discord.Member) and (o.connect or o.view_channel)]
         if not allowed:
-            return await send_and_autodelete(interaction, "⚠️ No hay usuarios permitidos.", delete_after=8)
-
+            return await interaction.response.send_message("⚠️ No hay usuarios permitidos.", ephemeral=True)
         options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in allowed[:25]]
-
         class DisallowSelect(discord.ui.Select):
             def __init__(self):
                 super().__init__(placeholder="Selecciona quién quitar", min_values=1, max_values=len(options), options=options)
-
-            async def callback(self, si: discord.Interaction):
+            async def callback(self, si):
                 for uid in self.values:
-                    member = si.guild.get_member(int(uid))
+                    member = interaction.guild.get_member(int(uid))
                     if member:
-                        try:
-                            await channel.set_permissions(member, overwrite=None)
-                        except:
-                            pass
-                await send_and_autodelete(si, "🚫 Acceso retirado.", delete_after=8)
-
+                        await channel.set_permissions(member, overwrite=None)
+                resp = await si.response.send_message("🚫 Acceso retirado.", ephemeral=True)
+                asyncio.create_task(auto_delete_msg(resp, 120))
         view = discord.ui.View(timeout=60)
         view.add_item(DisallowSelect())
-        await send_and_autodelete(interaction, "Selecciona usuarios:", view=view, delete_after=120)
+        msg = await interaction.response.send_message("Selecciona usuarios:", view=view, ephemeral=True)
+        asyncio.create_task(auto_delete_msg(msg, 120))
 
-    # ----- KICK -----
     @discord.ui.button(label="Expulsar", style=discord.ButtonStyle.danger, emoji="👢", custom_id="vc_kick")
     async def kick(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
         if not channel:
-            return await send_and_autodelete(interaction, "❌ No eres dueño de ninguna sala activa.", delete_after=8)
-
+            return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
         members = [m for m in channel.members if not m.bot and m != interaction.user]
         if not members:
-            return await send_and_autodelete(interaction, "⚠️ No hay usuarios para expulsar.", delete_after=8)
-
+            return await interaction.response.send_message("⚠️ No hay usuarios para expulsar.", ephemeral=True)
         options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
-
         class KickSelect(discord.ui.Select):
             def __init__(self):
                 super().__init__(placeholder="Selecciona a quién expulsar", min_values=1, max_values=len(options), options=options)
-
-            async def callback(self, si: discord.Interaction):
+            async def callback(self, si):
                 for uid in self.values:
-                    member = si.guild.get_member(int(uid))
-                    if member and member in channel.members:
-                        try:
-                            await member.move_to(None)
-                        except:
-                            pass
-                await send_and_autodelete(si, "👢 Usuarios expulsados.", delete_after=8)
-
+                    member = interaction.guild.get_member(int(uid))
+                    if member:
+                        await member.move_to(None)
+                resp = await si.response.send_message("👢 Usuarios expulsados.", ephemeral=True)
+                asyncio.create_task(auto_delete_msg(resp, 120))
         view = discord.ui.View(timeout=60)
         view.add_item(KickSelect())
-        await send_and_autodelete(interaction, "Selecciona miembros:", view=view, delete_after=120)
+        msg = await interaction.response.send_message("Selecciona miembros:", view=view, ephemeral=True)
+        asyncio.create_task(auto_delete_msg(msg, 120))
 
 # ======================
 # RESTAURAR CANALES AL INICIAR
 # ======================
 async def restore_temp_channels():
     await bot.wait_until_ready()
-    # intentamos limpiar registros huérfanos
-    for ch_id in list(data.keys()):
-        exists = False
-        for g in bot.guilds:
-            if g.get_channel(int(ch_id)):
-                exists = True
-                break
-        if not exists:
-            del data[ch_id]
-    save_data(data)
-    print("🔁 Restauración completada. Registros huérfanos eliminados.")
+    guild = bot.guilds[0]
+    to_delete = []
+    for ch_id, info in data.items():
+        ch = guild.get_channel(int(ch_id))
+        if ch is None:
+            to_delete.append(ch_id)
+    for ch_id in to_delete:
+        del data[ch_id]
+    if to_delete:
+        save_data(data)
+        print(f"🧹 Eliminados {len(to_delete)} registros huérfanos del JSON.")
+    print("🔁 Restauración completada. Canales activos recordados correctamente.")
 
 # ======================
 # CREACIÓN AUTOMÁTICA DEL PANEL
@@ -412,3 +341,15 @@ async def on_ready():
 # INICIO
 # ======================
 bot.run(os.getenv("TOKEN"))
+
+
+
+
+
+
+
+
+
+
+
+
