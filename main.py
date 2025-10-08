@@ -63,7 +63,7 @@ async def on_member_join(member):
         embed.add_field(name="📢 Reglas", value="<#1253936573716762708>", inline=True)
         embed.add_field(name="🎲 Roles", value="<#1273266265405919284>", inline=True)
         embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text="Nos alegra tenerte con nosotros 🦁")
+        embed.set_footer(text="Las sombras se agitan… un nuevo león despierta en NoMercy 🦁")
 
         # 👇 La mención va FUERA del embed (clickeable correctamente)
         await canal.send(
