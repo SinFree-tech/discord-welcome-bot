@@ -54,7 +54,7 @@ async def on_member_join(member):
         embed = discord.Embed(
             title="🎉 ¡Nuevo miembro en la familia!",
             description=(
-                f"👋 Bienvenido {member.mention} a **{member.guild.name}**!\n\n"
+                f"👋 ¡Nos alegra tenerte en **{member.guild.name}**!\n\n"
                 f"Contigo somos **{member.guild.member_count}** <a:dinnoo:1370259875132866650>\n\n"
                 "📜 No olvides leer las reglas y conseguir tus roles 🎭"
             ),
@@ -64,7 +64,12 @@ async def on_member_join(member):
         embed.add_field(name="🎲 Roles", value="<#1273266265405919284>", inline=True)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text="Nos alegra tenerte con nosotros 🦁")
-        await canal.send(embed=embed)
+
+        # 👇 La mención va FUERA del embed (clickeable correctamente)
+        await canal.send(
+            content=f"👋 ¡Bienvenido {member.mention}! 🎉",
+            embed=embed
+        )
 
 # ======================
 # COMANDOS BÁSICOS
