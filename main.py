@@ -105,7 +105,6 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
 @bot.event
 async def on_voice_state_update(member, before, after):
     global data
-    # ✅ Crear canal temporal
     if after.channel and after.channel.id == VOICE_CREATION_CHANNEL_ID:
         guild = member.guild
         category = after.channel.category
@@ -119,7 +118,6 @@ async def on_voice_state_update(member, before, after):
         data[str(new_channel.id)] = {"owner_id": member.id}
         await save_channel(new_channel.id, member.id)
 
-    # ❌ Eliminar canal vacío
     if before.channel and str(before.channel.id) in data:
         if len(before.channel.members) == 0:
             try:
@@ -153,12 +151,13 @@ class VoicePanel(discord.ui.View):
 
         def check(m):
             return m.author == interaction.user and m.channel == interaction.channel
-
         try:
             msg = await bot.wait_for("message", check=check, timeout=60)
             new_name = msg.content[:100]
             await msg.delete()
             await channel.edit(name=new_name)
+            await asyncio.sleep(1)
+            await channel.purge(limit=100)
             await interaction.followup.send(f"✅ Nombre cambiado a **{new_name}**", ephemeral=True)
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
@@ -189,23 +188,23 @@ class VoicePanel(discord.ui.View):
             return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
 
         await interaction.response.send_message("🔍 Escribe el nombre o ID del usuario (60s):", ephemeral=True)
-
         def check(m):
             return m.author == interaction.user and m.channel == interaction.channel
         try:
             msg = await bot.wait_for("message", check=check, timeout=60)
             query = msg.content.lower().strip()
             await msg.delete()
+            await asyncio.sleep(1)
+            await channel.purge(limit=100)
+
             matches = [m for m in interaction.guild.members if query in m.display_name.lower() or query == str(m.id)]
             if not matches:
                 return await interaction.followup.send("❌ No encontré usuarios.", ephemeral=True)
 
             options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in matches[:25]]
-
             class AllowSelect(discord.ui.Select):
                 def __init__(self):
                     super().__init__(placeholder="Selecciona miembros", min_values=1, max_values=len(options), options=options)
-
                 async def callback(self, si):
                     for uid in self.values:
                         member = interaction.guild.get_member(int(uid))
@@ -219,7 +218,7 @@ class VoicePanel(discord.ui.View):
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
 
-    # 🚫 BOTÓN: Quitar acceso
+    # 🚫 BOTÓN: Despermitir acceso
     @discord.ui.button(label="Despermitir", style=discord.ButtonStyle.danger, emoji="🚫", custom_id="vc_disallow")
     async def disallow(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
@@ -231,51 +230,35 @@ class VoicePanel(discord.ui.View):
             return await interaction.response.send_message("⚠️ No hay usuarios permitidos.", ephemeral=True)
 
         options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in allowed[:25]]
-
         class DisallowSelect(discord.ui.Select):
             def __init__(self):
                 super().__init__(placeholder="Selecciona quién quitar", min_values=1, max_values=len(options), options=options)
-
             async def callback(self, si):
                 for uid in self.values:
                     member = interaction.guild.get_member(int(uid))
                     if member:
                         await channel.set_permissions(member, overwrite=None)
+                await asyncio.sleep(1)
+                await channel.purge(limit=100)
                 await si.response.send_message("🚫 Acceso retirado.", ephemeral=True)
 
         view = discord.ui.View(timeout=60)
         view.add_item(DisallowSelect())
         await interaction.response.send_message("Selecciona usuarios:", view=view, ephemeral=True)
 
-    # 👢 BOTÓN: Expulsar miembros
-    @discord.ui.button(label="Expulsar", style=discord.ButtonStyle.danger, emoji="👢", custom_id="vc_kick")
-    async def kick(self, interaction: discord.Interaction, _):
-        channel = await self.get_owned_channel(interaction.user)
-        if not channel:
-            return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
-        members = [m for m in channel.members if not m.bot and m != interaction.user]
-        if not members:
-            return await interaction.response.send_message("⚠️ No hay usuarios para expulsar.", ephemeral=True)
-
-        options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
-
-        class KickSelect(discord.ui.Select):
-            def __init__(self):
-                super().__init__(placeholder="Selecciona a quién expulsar", min_values=1, max_values=len(options), options=options)
-
-            async def callback(self, si):
-                for uid in self.values:
-                    member = interaction.guild.get_member(int(uid))
-                    if member:
-                        await member.move_to(None)
-                await si.response.send_message("👢 Usuarios expulsados.", ephemeral=True)
-
-        view = discord.ui.View(timeout=60)
-        view.add_item(KickSelect())
-        await interaction.response.send_message("Selecciona miembros:", view=view, ephemeral=True)
+# ======================
+# DB TEST
+# ======================
+@bot.tree.command(name="dbtest", description="Verifica la conexión a la base de datos")
+async def dbtest(interaction: discord.Interaction):
+    try:
+        result = await bot.db.fetch("SELECT 1;")
+        await interaction.response.send_message("✅ Conectado correctamente a PostgreSQL.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error en la conexión:\n```{e}```", ephemeral=True)
 
 # ======================
-# RESTAURAR CANALES AL INICIAR
+# RESTAURAR CANALES
 # ======================
 async def restore_temp_channels():
     global data
@@ -295,7 +278,7 @@ async def restore_temp_channels():
     print("🔁 Restauración completada. Canales activos recordados correctamente.")
 
 # ======================
-# CREACIÓN AUTOMÁTICA DEL PANEL
+# PANEL AUTOMÁTICO
 # ======================
 async def setup_panel():
     await bot.wait_until_ready()
@@ -323,7 +306,7 @@ async def setup_panel():
     await channel.send(embed=embed, view=VoicePanel())
 
 # ======================
-# COMANDOS ADMIN
+# ADMIN
 # ======================
 @bot.tree.command(name="panel", description="Recrear manualmente el panel")
 async def panel(interaction: discord.Interaction):
@@ -356,21 +339,6 @@ async def on_ready():
     print(f"🤖 Conectado como {bot.user}")
 
 # ======================
-# INICIO
+# RUN
 # ======================
 bot.run(os.getenv("TOKEN"))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
