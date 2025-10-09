@@ -1,2 +1,4 @@
 discord.py==2.3.2
 python-dotenv
+asyncpg
+sqlalchemy==2.0.23
