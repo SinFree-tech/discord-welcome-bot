@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import os
 import asyncio
-import json
+import asyncpg
 
 # ======================
 # INTENTS
@@ -17,25 +17,34 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 WELCOME_CHANNEL_ID = 1254534174430199888
 TEXT_PANEL_CHANNEL_ID = 1425026451677384744
 VOICE_CREATION_CHANNEL_ID = 1425009175489937408
-DATA_FILE = "temvoice_data.json"
 
 # ======================
-# FUNCIONES DE PERSISTENCIA
+# CONEXIÓN A LA BASE DE DATOS
 # ======================
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except:
-                return {}
-    return {}
+async def init_db():
+    bot.db = await asyncpg.connect(os.getenv("DATABASE_URL"))
+    await bot.db.execute("""
+        CREATE TABLE IF NOT EXISTS temp_channels (
+            channel_id BIGINT PRIMARY KEY,
+            owner_id BIGINT
+        )
+    """)
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+async def save_channel(channel_id, owner_id):
+    await bot.db.execute("""
+        INSERT INTO temp_channels (channel_id, owner_id)
+        VALUES ($1, $2)
+        ON CONFLICT (channel_id) DO UPDATE SET owner_id = EXCLUDED.owner_id
+    """, channel_id, owner_id)
 
-data = load_data()
+async def delete_channel(channel_id):
+    await bot.db.execute("DELETE FROM temp_channels WHERE channel_id = $1", channel_id)
+
+async def load_channels():
+    rows = await bot.db.fetch("SELECT channel_id, owner_id FROM temp_channels")
+    return {str(r["channel_id"]): {"owner_id": r["owner_id"]} for r in rows}
+
+data = {}
 
 # ======================
 # EVENTO: BIENVENIDA
@@ -95,6 +104,7 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
 # ======================
 @bot.event
 async def on_voice_state_update(member, before, after):
+    global data
     # ✅ Crear canal temporal
     if after.channel and after.channel.id == VOICE_CREATION_CHANNEL_ID:
         guild = member.guild
@@ -107,14 +117,14 @@ async def on_voice_state_update(member, before, after):
         await new_channel.set_permissions(everyone, view_channel=True, connect=True)
         await member.move_to(new_channel)
         data[str(new_channel.id)] = {"owner_id": member.id}
-        save_data(data)
+        await save_channel(new_channel.id, member.id)
 
     # ❌ Eliminar canal vacío
     if before.channel and str(before.channel.id) in data:
         if len(before.channel.members) == 0:
             try:
                 del data[str(before.channel.id)]
-                save_data(data)
+                await delete_channel(before.channel.id)
                 await before.channel.delete()
             except:
                 pass
@@ -139,24 +149,19 @@ class VoicePanel(discord.ui.View):
         if not channel:
             return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
         
-        prompt = await interaction.response.send_message("✏️ Escribe el nuevo nombre (60s):", ephemeral=True)
+        await interaction.response.send_message("✏️ Escribe el nuevo nombre (60s):", ephemeral=True)
 
         def check(m):
             return m.author == interaction.user and m.channel == interaction.channel
 
         try:
             msg = await bot.wait_for("message", check=check, timeout=60)
-            new_name = msg.content[:100]  # Límite de caracteres
+            new_name = msg.content[:100]
             await msg.delete()
             await channel.edit(name=new_name)
             await interaction.followup.send(f"✅ Nombre cambiado a **{new_name}**", ephemeral=True)
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
-        finally:
-            try:
-                await prompt.delete()
-            except:
-                pass
 
     # 🔒 BOTÓN: Privacidad
     @discord.ui.button(label="Privacidad", style=discord.ButtonStyle.secondary, emoji="🔒", custom_id="vc_lock")
@@ -273,8 +278,10 @@ class VoicePanel(discord.ui.View):
 # RESTAURAR CANALES AL INICIAR
 # ======================
 async def restore_temp_channels():
+    global data
     await bot.wait_until_ready()
     guild = bot.guilds[0]
+    data = await load_channels()
     to_delete = []
     for ch_id, info in data.items():
         ch = guild.get_channel(int(ch_id))
@@ -282,9 +289,9 @@ async def restore_temp_channels():
             to_delete.append(ch_id)
     for ch_id in to_delete:
         del data[ch_id]
+        await delete_channel(int(ch_id))
     if to_delete:
-        save_data(data)
-        print(f"🧹 Eliminados {len(to_delete)} registros huérfanos del JSON.")
+        print(f"🧹 Eliminados {len(to_delete)} registros huérfanos.")
     print("🔁 Restauración completada. Canales activos recordados correctamente.")
 
 # ======================
@@ -316,7 +323,7 @@ async def setup_panel():
     await channel.send(embed=embed, view=VoicePanel())
 
 # ======================
-# /panel manual
+# COMANDOS ADMIN
 # ======================
 @bot.tree.command(name="panel", description="Recrear manualmente el panel")
 async def panel(interaction: discord.Interaction):
@@ -325,9 +332,6 @@ async def panel(interaction: discord.Interaction):
     await setup_panel()
     await interaction.response.send_message("✅ Panel recreado correctamente.", ephemeral=True)
 
-# ======================
-# /sync
-# ======================
 @bot.tree.command(name="sync", description="Forzar sincronización global de comandos")
 async def sync(interaction: discord.Interaction):
     synced = await bot.tree.sync()
@@ -338,6 +342,9 @@ async def sync(interaction: discord.Interaction):
 # ======================
 @bot.event
 async def on_ready():
+    await init_db()
+    global data
+    data = await load_channels()
     try:
         synced = await bot.tree.sync()
         print(f"✅ {len(synced)} comandos sincronizados correctamente.")
@@ -352,6 +359,7 @@ async def on_ready():
 # INICIO
 # ======================
 bot.run(os.getenv("TOKEN"))
+
 
 
 
