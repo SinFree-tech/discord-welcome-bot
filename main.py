@@ -37,13 +37,6 @@ def save_data(data):
 
 data = load_data()
 
-async def auto_delete_msg(msg_obj, delay=120):
-    try:
-        await asyncio.sleep(delay)
-        await msg_obj.delete()
-    except:
-        pass
-
 # ======================
 # EVENTO: BIENVENIDA
 # ======================
@@ -155,11 +148,9 @@ class VoicePanel(discord.ui.View):
             msg = await bot.wait_for("message", check=check, timeout=60)
             await channel.edit(name=msg.content)
             await msg.delete()
-            resp = await interaction.followup.send(f"✅ Nombre cambiado a **{msg.content}**", ephemeral=True)
-            asyncio.create_task(auto_delete_msg(resp, 120))
+            await interaction.followup.send(f"✅ Nombre cambiado a **{msg.content}**", ephemeral=True)
         except asyncio.TimeoutError:
-            resp = await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
-            asyncio.create_task(auto_delete_msg(resp, 120))
+            await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
 
     @discord.ui.button(label="Privacidad", style=discord.ButtonStyle.secondary, emoji="🔒", custom_id="vc_lock")
     async def privacy(self, interaction: discord.Interaction, _):
@@ -172,12 +163,11 @@ class VoicePanel(discord.ui.View):
 
         if locked:
             await channel.set_permissions(everyone, view_channel=True, connect=True)
-            msg = await interaction.response.send_message("🔓 Canal abierto para todos.", ephemeral=True)
+            await interaction.response.send_message("🔓 Canal abierto para todos.", ephemeral=True)
         else:
             await channel.set_permissions(everyone, view_channel=True, connect=False)
             await channel.set_permissions(interaction.user, view_channel=True, connect=True)
-            msg = await interaction.response.send_message("🔒 Canal bloqueado (visible pero sin acceso).", ephemeral=True)
-        asyncio.create_task(auto_delete_msg(msg, 120))
+            await interaction.response.send_message("🔒 Canal bloqueado (visible pero sin acceso).", ephemeral=True)
 
     @discord.ui.button(label="Permitir", style=discord.ButtonStyle.success, emoji="✅", custom_id="vc_allow")
     async def allow(self, interaction: discord.Interaction, _):
@@ -204,15 +194,12 @@ class VoicePanel(discord.ui.View):
                         member = interaction.guild.get_member(int(uid))
                         if member:
                             await channel.set_permissions(member, view_channel=True, connect=True)
-                    resp = await si.response.send_message("✅ Permisos actualizados.", ephemeral=True)
-                    asyncio.create_task(auto_delete_msg(resp, 120))
+                    await si.response.send_message("✅ Permisos actualizados.", ephemeral=True)
             view = discord.ui.View(timeout=60)
             view.add_item(AllowSelect())
-            msg = await interaction.followup.send("Selecciona usuarios:", view=view, ephemeral=True)
-            asyncio.create_task(auto_delete_msg(msg, 120))
+            await interaction.followup.send("Selecciona usuarios:", view=view, ephemeral=True)
         except asyncio.TimeoutError:
-            msg = await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
-            asyncio.create_task(auto_delete_msg(msg, 120))
+            await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
 
     @discord.ui.button(label="Despermitir", style=discord.ButtonStyle.danger, emoji="🚫", custom_id="vc_disallow")
     async def disallow(self, interaction: discord.Interaction, _):
@@ -232,12 +219,10 @@ class VoicePanel(discord.ui.View):
                     member = interaction.guild.get_member(int(uid))
                     if member:
                         await channel.set_permissions(member, overwrite=None)
-                resp = await si.response.send_message("🚫 Acceso retirado.", ephemeral=True)
-                asyncio.create_task(auto_delete_msg(resp, 120))
+                await si.response.send_message("🚫 Acceso retirado.", ephemeral=True)
         view = discord.ui.View(timeout=60)
         view.add_item(DisallowSelect())
-        msg = await interaction.response.send_message("Selecciona usuarios:", view=view, ephemeral=True)
-        asyncio.create_task(auto_delete_msg(msg, 120))
+        await interaction.response.send_message("Selecciona usuarios:", view=view, ephemeral=True)
 
     @discord.ui.button(label="Expulsar", style=discord.ButtonStyle.danger, emoji="👢", custom_id="vc_kick")
     async def kick(self, interaction: discord.Interaction, _):
@@ -256,12 +241,10 @@ class VoicePanel(discord.ui.View):
                     member = interaction.guild.get_member(int(uid))
                     if member:
                         await member.move_to(None)
-                resp = await si.response.send_message("👢 Usuarios expulsados.", ephemeral=True)
-                asyncio.create_task(auto_delete_msg(resp, 120))
+                await si.response.send_message("👢 Usuarios expulsados.", ephemeral=True)
         view = discord.ui.View(timeout=60)
         view.add_item(KickSelect())
-        msg = await interaction.response.send_message("Selecciona miembros:", view=view, ephemeral=True)
-        asyncio.create_task(auto_delete_msg(msg, 120))
+        await interaction.response.send_message("Selecciona miembros:", view=view, ephemeral=True)
 
 # ======================
 # RESTAURAR CANALES AL INICIAR
@@ -346,6 +329,7 @@ async def on_ready():
 # INICIO
 # ======================
 bot.run(os.getenv("TOKEN"))
+
 
 
 
