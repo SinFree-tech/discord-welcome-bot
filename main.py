@@ -246,6 +246,33 @@ class VoicePanel(discord.ui.View):
         view.add_item(DisallowSelect())
         await interaction.response.send_message("Selecciona usuarios:", view=view, ephemeral=True)
 
+    # 👢 BOTÓN: Expulsar miembros
+    @discord.ui.button(label="Expulsar", style=discord.ButtonStyle.danger, emoji="👢", custom_id="vc_kick")
+    async def kick(self, interaction: discord.Interaction, _):
+        channel = await self.get_owned_channel(interaction.user)
+        if not channel:
+            return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
+        members = [m for m in channel.members if not m.bot and m != interaction.user]
+        if not members:
+            return await interaction.response.send_message("⚠️ No hay usuarios para expulsar.", ephemeral=True)
+
+        options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
+
+        class KickSelect(discord.ui.Select):
+            def __init__(self):
+                super().__init__(placeholder="Selecciona a quién expulsar", min_values=1, max_values=len(options), options=options)
+
+            async def callback(self, si):
+                for uid in self.values:
+                    member = interaction.guild.get_member(int(uid))
+                    if member:
+                        await member.move_to(None)
+                await si.response.send_message("👢 Usuarios expulsados.", ephemeral=True)
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(KickSelect())
+        await interaction.response.send_message("Selecciona miembros:", view=view, ephemeral=True)
+
 # ======================
 # DB TEST
 # ======================
