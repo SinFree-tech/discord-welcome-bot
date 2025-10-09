@@ -58,11 +58,7 @@ async def on_member_join(member):
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text="Las sombras se agitan… un nuevo león despierta en NoMercy 🦁")
 
-        # 👇 La mención va FUERA del embed (clickeable correctamente)
-        await canal.send(
-            content=f"👋 ¡Bienvenido {member.mention}! 🎉",
-            embed=embed
-        )
+        await canal.send(content=f"👋 ¡Bienvenido {member.mention}! 🎉", embed=embed)
 
 # ======================
 # COMANDOS BÁSICOS
@@ -136,22 +132,33 @@ class VoicePanel(discord.ui.View):
                 return user.guild.get_channel(int(ch_id))
         return None
 
+    # 📝 BOTÓN: Cambiar nombre del canal
     @discord.ui.button(label="Nombre", style=discord.ButtonStyle.primary, emoji="📝", custom_id="vc_rename")
     async def rename(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
         if not channel:
             return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
-        await interaction.response.send_message("✏️ Escribe el nuevo nombre (60s):", ephemeral=True)
+        
+        prompt = await interaction.response.send_message("✏️ Escribe el nuevo nombre (60s):", ephemeral=True)
 
-        def check(m): return m.author == interaction.user and m.channel == interaction.channel
+        def check(m):
+            return m.author == interaction.user and m.channel == interaction.channel
+
         try:
             msg = await bot.wait_for("message", check=check, timeout=60)
-            await channel.edit(name=msg.content)
+            new_name = msg.content[:100]  # Límite de caracteres
             await msg.delete()
-            await interaction.followup.send(f"✅ Nombre cambiado a **{msg.content}**", ephemeral=True)
+            await channel.edit(name=new_name)
+            await interaction.followup.send(f"✅ Nombre cambiado a **{new_name}**", ephemeral=True)
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
+        finally:
+            try:
+                await prompt.delete()
+            except:
+                pass
 
+    # 🔒 BOTÓN: Privacidad
     @discord.ui.button(label="Privacidad", style=discord.ButtonStyle.secondary, emoji="🔒", custom_id="vc_lock")
     async def privacy(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
@@ -169,6 +176,7 @@ class VoicePanel(discord.ui.View):
             await channel.set_permissions(interaction.user, view_channel=True, connect=True)
             await interaction.response.send_message("🔒 Canal bloqueado (visible pero sin acceso).", ephemeral=True)
 
+    # ✅ BOTÓN: Permitir acceso
     @discord.ui.button(label="Permitir", style=discord.ButtonStyle.success, emoji="✅", custom_id="vc_allow")
     async def allow(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
@@ -176,7 +184,9 @@ class VoicePanel(discord.ui.View):
             return await interaction.response.send_message("❌ No eres dueño de ninguna sala activa.", ephemeral=True)
 
         await interaction.response.send_message("🔍 Escribe el nombre o ID del usuario (60s):", ephemeral=True)
-        def check(m): return m.author == interaction.user and m.channel == interaction.channel
+
+        def check(m):
+            return m.author == interaction.user and m.channel == interaction.channel
         try:
             msg = await bot.wait_for("message", check=check, timeout=60)
             query = msg.content.lower().strip()
@@ -186,21 +196,25 @@ class VoicePanel(discord.ui.View):
                 return await interaction.followup.send("❌ No encontré usuarios.", ephemeral=True)
 
             options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in matches[:25]]
+
             class AllowSelect(discord.ui.Select):
                 def __init__(self):
                     super().__init__(placeholder="Selecciona miembros", min_values=1, max_values=len(options), options=options)
+
                 async def callback(self, si):
                     for uid in self.values:
                         member = interaction.guild.get_member(int(uid))
                         if member:
                             await channel.set_permissions(member, view_channel=True, connect=True)
                     await si.response.send_message("✅ Permisos actualizados.", ephemeral=True)
+
             view = discord.ui.View(timeout=60)
             view.add_item(AllowSelect())
             await interaction.followup.send("Selecciona usuarios:", view=view, ephemeral=True)
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ Tiempo agotado.", ephemeral=True)
 
+    # 🚫 BOTÓN: Quitar acceso
     @discord.ui.button(label="Despermitir", style=discord.ButtonStyle.danger, emoji="🚫", custom_id="vc_disallow")
     async def disallow(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
@@ -210,20 +224,25 @@ class VoicePanel(discord.ui.View):
         allowed = [m for m, o in channel.overwrites.items() if isinstance(m, discord.Member) and (o.connect or o.view_channel)]
         if not allowed:
             return await interaction.response.send_message("⚠️ No hay usuarios permitidos.", ephemeral=True)
+
         options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in allowed[:25]]
+
         class DisallowSelect(discord.ui.Select):
             def __init__(self):
                 super().__init__(placeholder="Selecciona quién quitar", min_values=1, max_values=len(options), options=options)
+
             async def callback(self, si):
                 for uid in self.values:
                     member = interaction.guild.get_member(int(uid))
                     if member:
                         await channel.set_permissions(member, overwrite=None)
                 await si.response.send_message("🚫 Acceso retirado.", ephemeral=True)
+
         view = discord.ui.View(timeout=60)
         view.add_item(DisallowSelect())
         await interaction.response.send_message("Selecciona usuarios:", view=view, ephemeral=True)
 
+    # 👢 BOTÓN: Expulsar miembros
     @discord.ui.button(label="Expulsar", style=discord.ButtonStyle.danger, emoji="👢", custom_id="vc_kick")
     async def kick(self, interaction: discord.Interaction, _):
         channel = await self.get_owned_channel(interaction.user)
@@ -232,16 +251,20 @@ class VoicePanel(discord.ui.View):
         members = [m for m in channel.members if not m.bot and m != interaction.user]
         if not members:
             return await interaction.response.send_message("⚠️ No hay usuarios para expulsar.", ephemeral=True)
+
         options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
+
         class KickSelect(discord.ui.Select):
             def __init__(self):
                 super().__init__(placeholder="Selecciona a quién expulsar", min_values=1, max_values=len(options), options=options)
+
             async def callback(self, si):
                 for uid in self.values:
                     member = interaction.guild.get_member(int(uid))
                     if member:
                         await member.move_to(None)
                 await si.response.send_message("👢 Usuarios expulsados.", ephemeral=True)
+
         view = discord.ui.View(timeout=60)
         view.add_item(KickSelect())
         await interaction.response.send_message("Selecciona miembros:", view=view, ephemeral=True)
@@ -329,6 +352,7 @@ async def on_ready():
 # INICIO
 # ======================
 bot.run(os.getenv("TOKEN"))
+
 
 
 
